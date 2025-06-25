@@ -1,48 +1,53 @@
-from flask import Flask, request, send_file, jsonify
-import yt_dlp
-import os
-import uuid
+const express = require('express');
+const ytdl = require('@distube/ytdl-core');
+const ffmpeg = require('ffmpeg-static');
+const cp = require('child_process');
+const path = require('path');
 
-app = Flask(__name__)
+const app = express();
+const PORT = process.env.PORT || 3000;
 
-@app.route('/download', methods=['POST'])
-def download():
-    data = request.get_json()
-    url = data.get('url')
-    if not url:
-        return jsonify({'error': 'No URL provided'}), 400
+app.get('/', (req, res) => {
+  res.send(`
+    <h2>🎵 YouTube to MP3 Converter</h2>
+    <form action="/download" method="get">
+      <input type="text" name="url" placeholder="Enter YouTube URL" size="50" />
+      <button type="submit">Convert to MP3</button>
+    </form>
+  `);
+});
 
-    # Generate a unique filename
-    filename = f"{uuid.uuid4()}.mp3"
-    output_path = os.path.join('/tmp', filename)
+app.get('/download', async (req, res) => {
+  const videoURL = req.query.url;
 
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'outtmpl': output_path,
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }],
-        'quiet': True,
-    }
+  if (!ytdl.validateURL(videoURL)) {
+    return res.send('❌ Invalid YouTube URL!');
+  }
 
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+  const info = await ytdl.getInfo(videoURL);
+  const title = info.videoDetails.title.replace(/[^\w\s]/gi, '');
 
-    # Send the file and then delete it
-    try:
-        return send_file(output_path, as_attachment=True, download_name='audio.mp3')
-    finally:
-        if os.path.exists(output_path):
-            os.remove(output_path)
+  res.setHeader('Content-Disposition', `attachment; filename="${title}.mp3"`);
 
-@app.route('/')
-def home():
-    return 'YouTube to MP3 backend is running!'
+  const stream = ytdl(videoURL, { quality: 'highestaudio' });
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000)
+  const ffmpegProcess = cp.spawn(ffmpeg, [
+    '-i', 'pipe:3',
+    '-f', 'mp3',
+    '-ab', '192000',
+    '-vn',
+    'pipe:4',
+  ], {
+    stdio: [
+      'inherit', 'inherit', 'inherit',
+      'pipe', 'pipe'
+    ]
+  });
+
+  stream.pipe(ffmpegProcess.stdio[3]);
+  ffmpegProcess.stdio[4].pipe(res);
+});
+
+app.listen(PORT, () => {
+  console.log(`Server is running on http://localhost:${PORT}`);
+});
